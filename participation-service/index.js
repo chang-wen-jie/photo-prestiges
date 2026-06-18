@@ -1,234 +1,258 @@
-require('dotenv').config();
-const express = require('express');
-const mongoose = require('mongoose');
-const multer = require('multer');
-const amqp = require('amqplib');
-const path = require('path');
-const fs = require('fs');
-const Entry = require('./models/Entry');
-const ClosedTarget = require('./models/ClosedTarget');
-const axios = require('axios');
+require("dotenv").config();
+
+const express = require("express");
+
+const axios = require("axios");
+const mongoose = require("mongoose");
+const multer = require("multer");
+
+const fs = require("fs");
+const path = require("path");
+
+const Participant = require("./models/Participant");
+const {
+  submitEntry,
+  deleteEntry,
+  getMyScore,
+  getAllScores,
+} = require("./services/ParticipationService");
 
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3004;
-const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://localhost';
+const verifyInternalApiKey = (req, res, next) => {
+  const apiKey = req.headers["x-api-key"];
+  if (!apiKey || apiKey !== process.env.INTERNAL_API_KEY) {
+    return res
+      .status(403)
+      .json({ error: "Toegang geweigerd: Ongeldige interne API key" });
+  }
+  next();
+};
+app.use(verifyInternalApiKey);
 
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log('participation-service verbonden met MongoDB'))
-    .catch(err => console.error('participation-service MongoDB error: ', err));
+const RABBITMQ_URL = process.env.RABBITMQ_URL;
+const PORT = process.env.PORT;
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("3️⃣ participation-service: Verbonden met MongoDB"))
+  .catch((err) =>
+    console.error("3️⃣ participation-service: MongoDB error: ", err),
+  );
 
-const uploadDir = path.join(__dirname, 'uploads');
+const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-app.use('/uploads', express.static(uploadDir));
-
+app.use("/uploads", express.static(uploadDir));
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, `entry_${Date.now()}${path.extname(file.originalname)}`)
+  destination: (req, file, cb) => cb(null, "uploads/"),
+  filename: (req, file, cb) =>
+    cb(null, `entry_${Date.now()}${path.extname(file.originalname)}`),
 });
 const upload = multer({ storage });
 
-async function listenForReachedDeadlines() {
-    try {
-        const connection = await amqp.connect(RABBITMQ_URL);
-        const channel = await connection.createChannel();
-        const queue = 'deadline_reached';
-        await channel.assertQueue(queue, { durable: true });
-        console.log("participation-service luistert naar deadline_reached...");
+async function listenForUserRegistered() {
+  try {
+    const connection = await amqp.connect(RABBITMQ_URL);
+    const channel = await connection.createChannel();
+    const userRegisteredQueue = "user_registered";
+    await channel.assertQueue(userRegisteredQueue, { durable: true });
 
-        channel.consume(queue, async (msg) => {
-            if (msg !== null) {
-                const data = JSON.parse(msg.content.toString());
-                
-                await ClosedTarget.updateOne(
-                    { targetId: data.targetId },
-                    { $set: { targetId: data.targetId } },
-                    { upsert: true }
-                );
-                console.log(`Target gesloten: ${data.targetId}`);
-                
-                const entries = await Entry.find({ targetId: data.targetId });
-                const participantsToMail = entries.map(entry => {
-                    return {
-                        userId: entry.userId,
-                        score: entry.score,
-                        email: `${entry.userId}@photo-prestiges.com` // mock e-mailadres
-                    };
-                });
+    channel.consume(userRegisteredQueue, async (msg) => {
+      if (msg !== null) {
+        const data = JSON.parse(msg.content.toString());
 
-                const mailQueue = 'send_emails';
-                await channel.assertQueue(mailQueue, { durable: true });
-                const mailPayload = JSON.stringify({
-                    targetId: data.targetId,
-                    participants: participantsToMail
-                });
-                channel.sendToQueue(mailQueue, Buffer.from(mailPayload));
-                channel.ack(msg);
-            }
-        });
-    } catch (error) {
-        setTimeout(listenForReachedDeadlines, 5000);
-    }
+        await Participant.updateOne(
+          { userId: data.userId },
+          { $set: { userId: data.userId } },
+          { upsert: true },
+        );
+        channel.ack(msg);
+      }
+    });
+  } catch (error) {
+    setTimeout(listenForUserRegistered, 5000);
+  }
 }
-listenForReachedDeadlines();
+listenForUserRegistered();
+
+async function listenForDeadlineReached() {
+  try {
+    const connection = await amqp.connect(RABBITMQ_URL);
+    const channel = await connection.createChannel();
+    const deadlineReachedQueue = "deadline_reached";
+    await channel.assertQueue(deadlineReachedQueue, { durable: true });
+
+    channel.consume(deadlineReachedQueue, async (msg) => {
+      if (msg !== null) {
+        const data = JSON.parse(msg.content.toString());
+
+        await ClosedTarget.updateOne(
+          { targetId: data.targetId },
+          { $set: { targetId: data.targetId } },
+          { upsert: true },
+        );
+        console.log(`Target gesloten: ${data.targetId}`);
+
+        const entries = await Entry.find({ targetId: data.targetId });
+        const participantsToMail = entries.map((entry) => {
+          return {
+            userId: entry.userId,
+            score: entry.score,
+            email: `${entry.userId}@photo-prestiges.com`, // mock e-mailadres
+          };
+        });
+        const mailQueue = "send_emails";
+
+        await channel.assertQueue(mailQueue, { durable: true });
+        const mailPayload = JSON.stringify({
+          targetId: data.targetId,
+          participants: participantsToMail,
+        });
+        channel.sendToQueue(mailQueue, Buffer.from(mailPayload));
+        channel.ack(msg);
+      }
+    });
+  } catch (error) {
+    setTimeout(listenForDeadlineReached, 5000);
+  }
+}
+listenForDeadlineReached();
 
 async function listenForTriggerReminders() {
-    try {
-        const connection = await amqp.connect(RABBITMQ_URL);
-        const channel = await connection.createChannel();
-        const reminderQueue = 'trigger_reminders';
-        await channel.assertQueue(reminderQueue, { durable: true });
-        console.log("participation-service luistert naar trigger_reminders...");
+  try {
+    const connection = await amqp.connect(RABBITMQ_URL);
+    const channel = await connection.createChannel();
+    const triggerRemaindersQueue = "trigger_reminders";
+    await channel.assertQueue(triggerRemaindersQueue, { durable: true });
 
-        channel.consume(reminderQueue, async (msg) => {
-            if (msg !== null) {
-                const data = JSON.parse(msg.content.toString());
+    channel.consume(triggerRemaindersQueue, async (msg) => {
+      if (msg !== null) {
+        const data = JSON.parse(msg.content.toString());
 
-                const authUrl = process.env.AUTH_SERVICE_URL || 'http://localhost:3001';
-                const response = await axios.get(`${authUrl}/internal/users`);
-                const allUsers = response.data;
+        const allParticipants = await Participant.find();
+        const entries = await Entry.find({ targetId: data.targetId });
+        const submittedUserIds = entries.map((entry) => entry.userId);
+        const slackers = allParticipants.filter(
+          (p) => !submittedUserIds.includes(p.userId),
+        );
 
-                const entries = await Entry.find({ targetId: data.targetId });
-                const submittedUserIds = entries.map(entry => entry.userId);
-                const slackers = allUsers.filter(user => !submittedUserIds.includes(user._id.toString()));
+        if (slackers.length > 0) {
+          const participantsToMail = slackers.map((slacker) => {
+            return {
+              userId: slacker.userId,
+              email: `${slackers.userId}@photo-prestiges.com`,
+            };
+          });
 
-                if (slackers.length > 0) {
-                    const participantsToMail = slackers.map(user => {
-                        return {
-                            userId: user.username,
-                            email: `${user.username}@photo-prestiges.com` 
-                        };
-                    });
+          const mailQueue = "send_emails";
+          await channel.assertQueue(mailQueue, { durable: true });
+          const mailPayload = JSON.stringify({
+            type: "REMINDER",
+            targetId: data.targetId,
+            timeLeft: data.timeLeft,
+            participants: participantsToMail,
+          });
 
-                    const mailQueue = 'send_emails';
-                    await channel.assertQueue(mailQueue, { durable: true });
-                    const mailPayload = JSON.stringify({
-                        type: 'REMINDER',
-                        targetId: data.targetId,
-                        timeLeft: data.timeLeft,
-                        participants: participantsToMail
-                    });
-
-                    channel.sendToQueue(mailQueue, Buffer.from(mailPayload));
-                }
-                channel.ack(msg);
-            }
-        });
-    } catch (error) {
-        setTimeout(listenForTriggerReminders, 5000);
-    }
+          channel.sendToQueue(mailQueue, Buffer.from(mailPayload));
+        }
+        channel.ack(msg);
+      }
+    });
+  } catch (error) {
+    setTimeout(listenForTriggerReminders, 5000);
+  }
 }
 listenForTriggerReminders();
 
-app.post('/:targetId', upload.single('image'), async (req, res) => {
-    try {
-        const userId = req.headers['x-user-id'];
-        const targetId = req.params.targetId;
+async function listenForScoreCalculated() {
+  try {
+    const connection = await amqp.connect(RABBITMQ_URL);
+    const channel = await connection.createChannel();
+    const scoreCalculatedQueue = "score_calculated";
+    await channel.assertQueue(scoreCalculatedQueue, { durable: true });
 
-        if (!req.file) return res.status(400).json({ error: 'Afbeelding is verplicht' });
-        const isClosed = await ClosedTarget.findOne({ targetId: targetId });
-        if (isClosed) {
-            return res.status(403).json({ error: 'Target deadline is voorbij' });
-        }
+    channel.consume(scoreCalculatedQueue, async (msg) => {
+      if (msg !== null) {
+        const data = JSON.parse(msg.content.toString());
 
-        const submissionTime = new Date(); 
+        // Werk de lokale Entry bij met de nieuwe score!
+        await Entry.findByIdAndUpdate(data.entryId, { score: data.score });
+        console.log(`Score opgeslagen voor entry: ${data.entryId}`);
 
-        const newEntry = new Entry({
-            targetId: targetId,
-            userId: userId,
-            imageUrl: `/uploads/${req.file.filename}`,
-            createdAt: submissionTime
-        });
+        channel.ack(msg);
+      }
+    });
+  } catch (error) {
+    setTimeout(listenForScoreCalculated, 5000);
+  }
+}
+listenForScoreCalculated();
 
-        await newEntry.save();
-
-        const connection = await amqp.connect(RABBITMQ_URL);
-        const channel = await connection.createChannel();
-        const queue = 'entry_submitted';
-        
-        await channel.assertQueue(queue, { durable: true });
-        
-        const messagePayload = JSON.stringify({
-            entryId: newEntry._id,
-            targetId: newEntry.targetId,
-            imageUrl: newEntry.imageUrl,
-            createdAt: newEntry.createdAt
-        });
-        
-        channel.sendToQueue(queue, Buffer.from(messagePayload));
-        setTimeout(() => { connection.close(); }, 500);
-        res.status(201).json({ message: 'Entry ingediend', entry: newEntry });
-
-    } catch (error) {
-        res.status(500).json({ error: 'Entry indienen mislukt' });
-    }
+app.post("/:targetId", upload.single("image"), async (req, res) => {
+  try {
+    const fileUrl = req.file ? `/uploads/${req.file.filename}` : null;
+    const entry = await submitEntry(
+      req.headers["x-user-id"],
+      req.params.targetId,
+      fileUrl,
+    );
+    res.status(201).json({ message: "Entry ingediend", entry });
+  } catch (error) {
+    if (error.message === "NO_FILE")
+      return res.status(400).json({ error: "Afbeelding is verplicht" });
+    if (error.message === "CLOSED")
+      return res.status(403).json({ error: "Target deadline is voorbij" });
+    res.status(500).json({ error: "Entry indienen mislukt" });
+  }
 });
 
-app.delete('/:id', async (req, res) => {
-    try {
-        const entryId = req.params.id;
-        const userId = req.headers['x-user-id'];
-
-        const entry = await Entry.findById(entryId);
-        if (!entry) {
-            return res.status(404).json({ error: 'Entry niet gevonden' });
-        }
-
-        if (entry.userId !== userId) {
-            return res.status(403).json({ error: 'Niet geauthoriseerd om entry te verwijderen' });
-        }
-
-        const filePath = path.join(__dirname, entry.imageUrl);
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath); 
-        }
-
-        await Entry.findByIdAndDelete(entryId);
-        res.status(200).json({ message: 'Entry verwijderd' });
-
-    } catch (error) {
-        res.status(500).json({ error: 'Entry verwijderen mislukt' });
-    }
+app.delete("/:id", async (req, res) => {
+  try {
+    await deleteEntry(req.params.id, req.headers["x-user-id"], __dirname);
+    res.status(200).json({ message: "Entry verwijderd" });
+  } catch (error) {
+    if (error.message === "NOT_FOUND")
+      return res.status(404).json({ error: "Entry niet gevonden" });
+    if (error.message === "UNAUTHORIZED")
+      return res.status(403).json({ error: "Niet geauthoriseerd" });
+    res.status(500).json({ error: "Entry verwijderen mislukt" });
+  }
 });
 
-app.get('/:targetId/my-score', async (req, res) => {
-    try {
-        const userId = req.headers['x-user-id'];
-
-        const entry = await Entry.findOne({ targetId: req.params.targetId, userId: userId });
-        if (!entry) {
-            return res.status(404).json({ message: 'Geen entry ingediend' });
-        }
-        
-        res.status(200).json({ 
-            message: 'Score opgehaald', 
-            score: entry.score !== null ? entry.score : 'Score wordt berekend...' 
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Score ophalen mislukt' });
-    }
+app.get("/:targetId/my-score", async (req, res) => {
+  try {
+    const score = await getMyScore(
+      req.params.targetId,
+      req.headers["x-user-id"],
+    );
+    res.status(200).json({ message: "Score opgehaald: ", score });
+  } catch (error) {
+    if (error.message === "NOT_FOUND")
+      return res.status(404).json({ message: "Geen entry ingediend" });
+    res.status(500).json({ error: "Score ophalen mislukt" });
+  }
 });
 
-app.get('/:targetId/scores', async (req, res) => {
-    try {
-        const userRole = req.headers['x-user-role'];
-        if (userRole !== 'owner') {
-            return res.status(403).json({ error: 'Niet geauthoriseerd om scores op te halen' });
-        }
-
-        const entries = await Entry.find({ targetId: req.params.targetId }).select('-imageUrl'); // geheugen besparen
-        
-        res.status(200).json({
-            message: 'PScores opgehaald',
-            totalEntries: entries.length,
-            entries: entries
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Scores ophalen mislukt' });
-    }
+app.get("/:targetId/scores", async (req, res) => {
+  try {
+    const entries = await getAllScores(
+      req.params.targetId,
+      req.headers["x-user-role"],
+    );
+    res
+      .status(200)
+      .json({
+        message: "Scores opgehaald",
+        totalEntries: entries.length,
+        entries,
+      });
+  } catch (error) {
+    if (error.message === "UNAUTHORIZED")
+      return res.status(403).json({ error: "Niet geauthoriseerd" });
+    res.status(500).json({ error: "Scores ophalen mislukt" });
+  }
 });
 
 app.listen(PORT, () => {
-    console.log(`participation-service draait op poort: ${PORT}`);
+  console.log(`3️⃣ participation-service: Draait op poort ${PORT}`);
 });
