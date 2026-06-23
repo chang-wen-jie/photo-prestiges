@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const jwt = require("jsonwebtoken");
 
 const axios = require("axios");
 const CircuitBreaker = require("opossum");
@@ -27,7 +28,7 @@ const verifyToken = (req, res, next) => {
   }
 
   try {
-    const verified = verify(token, process.env.JWT_SECRET);
+    const verified = jwt.verify(token, process.env.JWT_SECRET);
     req.user = verified;
 
     req.headers["x-user-id"] = verified.id;

@@ -39,9 +39,8 @@ async function listenForNewTargets() {
             if (msg !== null) {
                 const data = JSON.parse(msg.content.toString());
                 
-                // Sla een lokale, read-only kopie op in de read-service database
                 await Target.updateOne(
-                    { targetId: data.targetId }, // Zoek op de originele targetId
+                    { targetId: data.targetId },
                     { 
                         $set: { 
                             targetId: data.targetId,
@@ -52,7 +51,7 @@ async function listenForNewTargets() {
                             createdAt: new Date(data.createdAt)
                         } 
                     },
-                    { upsert: true } // Als hij niet bestaat, maak hem aan
+                    { upsert: true }
                 );
                 
                 console.log(`Lokale kopie gemaakt van target: ${data.targetId}`);
@@ -77,7 +76,6 @@ async function listenForDeletedTargets() {
             if (msg !== null) {
                 const data = JSON.parse(msg.content.toString());
                 
-                // Verwijder de lokale kopie als de owner hem verwijdert
                 await Target.deleteOne({ targetId: data.targetId });
                 
                 console.log(`Lokale kopie verwijderd van target: ${data.targetId}`);

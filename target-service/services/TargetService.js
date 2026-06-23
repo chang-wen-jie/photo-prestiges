@@ -21,13 +21,8 @@ async function createTarget(
     deadline: new Date(deadline),
   });
   await newTarget.save();
-
-  const connection = await amqp.connect(process.env.RABBITMQ_URL);
-  const channel = await connection.createChannel();
-  const queue = "target_created";
-
-  await channel.assertQueue(queue, { durable: true });
-  const messagePayload = JSON.stringify({
+  
+  await publishEvent("target_created", {
     targetId: newTarget._id,
     ownerId: newTarget.ownerId,
     locationDescription: newTarget.locationDescription,
@@ -35,10 +30,6 @@ async function createTarget(
     deadline: newTarget.deadline,
     createdAt: newTarget._id.getTimestamp(),
   });
-  channel.sendToQueue(queue, Buffer.from(messagePayload));
-  setTimeout(() => {
-    connection.close();
-  }, 500);
 
   return newTarget;
 }
