@@ -12,6 +12,10 @@ const { createTarget, getAllTargets, deleteTarget } = require('./services/Target
 const app = express();
 app.use(express.json());
 
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+app.use("/uploads", express.static(uploadDir));
+
 const verifyInternalApiKey = (req, res, next) => {
   const apiKey = req.headers["x-api-key"];
   if (!apiKey || apiKey !== process.env.INTERNAL_API_KEY) {
@@ -29,9 +33,7 @@ mongoose
   .then(() => console.log("2️⃣ target-service: Verbonden met MongoDB"))
   .catch((err) => console.error("2️⃣ target-service: MongoDB error: ", err));
 
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-app.use("/uploads", express.static(uploadDir));
+
 const storage = multer.diskStorage({
   // onthou afbeeldingen na service ctrl+c
   destination: (req, file, cb) => cb(null, "uploads/"),

@@ -22,14 +22,18 @@ async function createTarget(
   });
   await newTarget.save();
   
-  await publishEvent("target_created", {
+  const payload = {
     targetId: newTarget._id,
     ownerId: newTarget.ownerId,
     locationDescription: newTarget.locationDescription,
     imageUrl: newTarget.imageUrl,
     deadline: newTarget.deadline,
     createdAt: newTarget._id.getTimestamp(),
-  });
+  };
+
+  await publishEvent("clock_target_created", payload);
+  await publishEvent("score_target_created", payload);
+  await publishEvent("read_target_created", payload);
 
   return newTarget;
 }

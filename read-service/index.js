@@ -5,6 +5,7 @@ const express = require("express");
 const amqp = require("amqplib");
 const mongoose = require("mongoose");
 
+const Target = require("./models/Target");
 const { getActiveTargets } = require('./services/ReadService');
 
 const app = express();
@@ -32,7 +33,7 @@ async function listenForNewTargets() {
     try {
         const connection = await amqp.connect(RABBITMQ_URL);
         const channel = await connection.createChannel();
-        const targetCreatedQueue = 'target_created';
+        const targetCreatedQueue = 'read_target_created';
         await channel.assertQueue(targetCreatedQueue, { durable: true });
 
         channel.consume(targetCreatedQueue, async (msg) => {
@@ -53,8 +54,6 @@ async function listenForNewTargets() {
                     },
                     { upsert: true }
                 );
-                
-                console.log(`Lokale kopie gemaakt van target: ${data.targetId}`);
                 channel.ack(msg);
             }
         });
@@ -75,10 +74,7 @@ async function listenForDeletedTargets() {
         channel.consume(targetDeletedQueue, async (msg) => {
             if (msg !== null) {
                 const data = JSON.parse(msg.content.toString());
-                
                 await Target.deleteOne({ targetId: data.targetId });
-                
-                console.log(`Lokale kopie verwijderd van target: ${data.targetId}`);
                 channel.ack(msg);
             }
         });

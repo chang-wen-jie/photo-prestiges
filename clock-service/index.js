@@ -11,9 +11,8 @@ async function listenForTargetCreated() {
   try {
     const connection = await amqp.connect(RABBITMQ_URL);
     const channel = await connection.createChannel();
-    const targetQueue = "target_created";
+    const targetQueue = "clock_target_created";
     await channel.assertQueue(targetQueue, { durable: true });
-    console.log("clock-service luistert naar target_created...");
 
     channel.consume(targetQueue, (msg) => {
       if (msg !== null) {

@@ -17,14 +17,13 @@ async function listenForTargetCreated() {
   try {
     const connection = await amqp.connect(RABBITMQ_URL);
     const channel = await connection.createChannel();
-    const targetCreatedQueue = "target_created";
+    const targetCreatedQueue = "score_target_created";
     await channel.assertQueue(targetCreatedQueue, { durable: true });
 
     channel.consume(targetCreatedQueue, async (msg) => {
       if (msg !== null) {
         const data = JSON.parse(msg.content.toString());
 
-        // Sla alleen de datums op die we nodig hebben voor de speed bonus
         await Target.updateOne(
           { targetId: data.targetId },
           {
@@ -36,8 +35,6 @@ async function listenForTargetCreated() {
           },
           { upsert: true },
         );
-
-        console.log(`Lokale kopie gemaakt van target datums: ${data.targetId}`);
         channel.ack(msg);
       }
     });

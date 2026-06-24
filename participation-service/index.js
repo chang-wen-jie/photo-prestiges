@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const amqp = require("amqplib");
 const express = require("express");
 
 const axios = require("axios");
@@ -10,6 +11,8 @@ const fs = require("fs");
 const path = require("path");
 
 const Participant = require("./models/Participant");
+const Entry = require("./models/Entry");
+const ClosedTarget = require("./models/ClosedTarget");
 const {
   submitEntry,
   deleteEntry,
@@ -98,7 +101,7 @@ async function listenForDeadlineReached() {
           return {
             userId: entry.userId,
             score: entry.score,
-            email: `${entry.userId}@photo-prestiges.com`, // mock e-mailadres
+            email: `${entry.userId}@photo-prestiges.com`,
           };
         });
         const mailQueue = "send_emails";
@@ -140,7 +143,7 @@ async function listenForTriggerReminders() {
           const participantsToMail = slackers.map((slacker) => {
             return {
               userId: slacker.userId,
-              email: `${slackers.userId}@photo-prestiges.com`,
+              email: `${slacker.userId}@photo-prestiges.com`,
             };
           });
 
@@ -175,7 +178,6 @@ async function listenForScoreCalculated() {
       if (msg !== null) {
         const data = JSON.parse(msg.content.toString());
 
-        // Werk de lokale Entry bij met de nieuwe score!
         await Entry.findByIdAndUpdate(data.entryId, { score: data.score });
         console.log(`Score opgeslagen voor entry: ${data.entryId}`);
 
